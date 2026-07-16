@@ -1,12 +1,14 @@
 """
-Max Pain calculator for Deribit options (BTC / ETH).
+Max Pain calculator for Deribit options (BTC / ETH / SOL / HYPE).
 
 Fetches open interest for all options from Deribit's public API,
 groups by expiry, and computes the Max Pain strike per expiry.
+BTC/ETH are inverse options; SOL/HYPE are USDC-settled (linear),
+where OI is normalized by contract size so totals are in coins.
 
 Usage:
     python maxpain.py                              # print all expiries (BTC)
-    python maxpain.py --currency ETH               # same for ETH
+    python maxpain.py --currency SOL               # same for SOL (or ETH / HYPE)
     python maxpain.py --top 6                      # top 6 expiries by total OI
     python maxpain.py --top 8 --pine out.pine      # also generate a TradingView Pine Script
 """
@@ -18,28 +20,57 @@ import urllib.request
 from collections import defaultdict
 from datetime import datetime, timezone
 
-API = "https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency={cur}&kind=option"
+BOOK_API = "https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency={cur}&kind=option"
+INSTRUMENTS_API = "https://www.deribit.com/api/v2/public/get_instruments?currency={cur}&kind=option"
+
+# display currency -> (Deribit API currency, instrument-name prefix)
+# BTC/ETH are inverse options; the rest live under the USDC linear group.
+MARKETS = {
+    "BTC": ("BTC", "BTC"),
+    "ETH": ("ETH", "ETH"),
+    "SOL": ("USDC", "SOL_USDC"),
+    "HYPE": ("USDC", "HYPE_USDC"),
+}
 
 
-def instrument_re(currency):
-    # e.g. BTC-26SEP26-120000-C, ETH-25DEC26-4000-P
-    return re.compile(rf"^{currency}-(\d{{1,2}}[A-Z]{{3}}\d{{2}})-(\d+)-([CP])$")
+def instrument_re(prefix):
+    # e.g. BTC-26SEP26-120000-C, SOL_USDC-28AUG26-116-C, XRP_USDC-25SEP26-1d35-C
+    # ('d' is Deribit's decimal point in fractional strikes)
+    return re.compile(rf"^{prefix}-(\d{{1,2}}[A-Z]{{3}}\d{{2}})-(\d+(?:d\d+)?)-([CP])$")
 
 
-def fetch_book(currency):
-    url = API.format(cur=currency)
+def parse_strike(s):
+    return float(s.replace("d", "."))
+
+
+def _get(url):
     req = urllib.request.Request(url, headers={"User-Agent": "maxpain-script"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.load(resp)["result"]
+
+
+def fetch_book(api_currency):
+    return _get(BOOK_API.format(cur=api_currency))
+
+
+def fetch_contract_sizes(api_currency):
+    """instrument_name -> contract size (coins per contract). 1.0 for inverse options."""
+    return {d["instrument_name"]: float(d.get("contract_size") or 1.0)
+            for d in _get(INSTRUMENTS_API.format(cur=api_currency))}
 
 
 def parse_expiry(s):
     return datetime.strptime(s, "%d%b%y").replace(hour=8, tzinfo=timezone.utc)  # Deribit settles 08:00 UTC
 
 
-def max_pain(options):
-    """options: list of (strike, type, oi). Returns (max_pain_strike, payout_at_mp)."""
-    strikes = sorted({o[0] for o in options})
+def max_pain(options, candidates=None):
+    """options: list of (strike, type, oi). Returns (max_pain_strike, payout_at_mp).
+
+    candidates: strikes to evaluate; defaults to the strikes present in options.
+    Passing every listed strike of the chain (incl. zero-OI ones) matches the
+    common convention -- on ties the lowest strike wins.
+    """
+    strikes = sorted(candidates if candidates else {o[0] for o in options})
     best_strike, best_payout = None, float("inf")
     for s in strikes:
         payout = 0.0
@@ -118,7 +149,7 @@ if barstate.islast
                 array.push(usedPx, px)
                 lx = time - dup * 30 * timeframe.in_seconds() * 1000
                 expName = (dd < 10 ? "0" : "") + str.tostring(dd) + array.get(monthNames, mm - 1) + str.tostring(yy)
-                txt = expName + "  " + str.tostring(px, "#")
+                txt = expName + "  " + str.tostring(px, "#.####")
                 if showOI
                     txt := txt + "  |  OI " + str.tostring(oi, "#") + " {cur}"
                 array.push(lbs, label.new(lx, px, txt, xloc = xloc.bar_time, style = label.style_label_right, color = color.new(col, 85), textcolor = col, size = size.small))
@@ -127,7 +158,7 @@ if barstate.islast
 
 def data_string(rows):
     """Compact data string for the indicator's Data input: YYMMDD:maxpain:oi,..."""
-    return ",".join(f"{r[0]:%y%m%d}:{r[2]:.0f}:{r[3]:.0f}" for r in rows)
+    return ",".join(f"{r[0]:%y%m%d}:{r[2]:g}:{r[3]:.0f}" for r in rows)
 
 
 def copy_to_clipboard(text):
@@ -150,7 +181,7 @@ def generate_pine(rows, underlying_price, out_path, currency):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--currency", default="BTC", choices=["BTC", "ETH"], help="Deribit currency (default: BTC)")
+    ap.add_argument("--currency", default="BTC", choices=list(MARKETS), help="Deribit currency (default: BTC)")
     ap.add_argument("--top", type=int, default=0, help="show only top N expiries by total OI")
     ap.add_argument("--pine", metavar="FILE", help="write a TradingView Pine Script to FILE")
     ap.add_argument("--string", action="store_true", help="print the compact data string for the indicator's Data input")
@@ -158,17 +189,22 @@ def main():
     args = ap.parse_args()
 
     cur = args.currency
-    book = fetch_book(cur)
-    rx = instrument_re(cur)
+    api_cur, prefix = MARKETS[cur]
+    book = fetch_book(api_cur)
+    sizes = fetch_contract_sizes(api_cur)
+    rx = instrument_re(prefix)
     by_expiry = defaultdict(list)
+    chain_strikes = defaultdict(set)  # all listed strikes per expiry, incl. zero-OI
     underlying_price = None
 
     for item in book:
-        m = rx.match(item["instrument_name"])
+        name = item["instrument_name"]
+        m = rx.match(name)
         if not m:
             continue
-        expiry, strike, typ = m.group(1), float(m.group(2)), m.group(3)
-        oi = item.get("open_interest") or 0.0
+        expiry, strike, typ = m.group(1), parse_strike(m.group(2)), m.group(3)
+        chain_strikes[expiry].add(strike)
+        oi = (item.get("open_interest") or 0.0) * sizes.get(name, 1.0)
         if oi > 0:
             by_expiry[expiry].append((strike, typ, oi))
         if underlying_price is None and item.get("underlying_price"):
@@ -176,7 +212,7 @@ def main():
 
     rows = []
     for expiry, options in by_expiry.items():
-        mp, _ = max_pain(options)
+        mp, _ = max_pain(options, chain_strikes[expiry])
         total_oi = sum(o[2] for o in options)
         rows.append((parse_expiry(expiry), expiry, mp, total_oi, len(options)))
     rows.sort(key=lambda r: r[0])
@@ -190,7 +226,7 @@ def main():
     print(f"{'Expiry':<10} {'Max Pain':>10} {f'Total OI ({cur})':>15} {'Contracts':>10}")
     print("-" * 50)
     for dt, expiry, mp, total_oi, n in rows:
-        print(f"{expiry:<10} {mp:>10,.0f} {total_oi:>15,.0f} {n:>10}")
+        print(f"{expiry:<10} {mp:>10,.10g} {total_oi:>15,.0f} {n:>10}")
 
     if args.pine:
         generate_pine(rows, underlying_price, args.pine, cur)
