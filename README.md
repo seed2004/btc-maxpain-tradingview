@@ -1,8 +1,8 @@
-# BTC Max Pain → TradingView
+# BTC / ETH Max Pain → TradingView
 
-แสดงจุด **Max Pain** ของ BTC options (Deribit) ทุก expiry สำคัญ เป็นเส้นแนวนอนบนกราฟ TradingView
+แสดงจุด **Max Pain** ของ BTC และ ETH options (Deribit) ทุก expiry สำคัญ เป็นเส้นแนวนอนบนกราฟ TradingView
 
-*Plot Deribit BTC options Max Pain levels per expiry as horizontal lines on your TradingView chart.*
+*Plot Deribit BTC/ETH options Max Pain levels per expiry as horizontal lines on your TradingView chart.*
 
 ![Pine v6](https://img.shields.io/badge/Pine%20Script-v6-blue) ![Python](https://img.shields.io/badge/Python-3.8%2B-green) ![License MIT](https://img.shields.io/badge/License-MIT-lightgrey)
 
@@ -25,9 +25,11 @@ Max Pain คือราคา strike ที่ทำให้ผู้ถือ
 | ไฟล์ | หน้าที่ |
 |---|---|
 | `maxpain.py` | ดึง Deribit API → คำนวณ Max Pain → สร้าง Pine Script / data string (ใช้ Python stdlib ล้วน ไม่ต้องติดตั้งอะไรเพิ่ม) |
-| `BTC_MaxPain.pine` | Indicator สำหรับ TradingView (Pine Script v6) |
-| `update_maxpain.bat` | (Windows) ดับเบิลคลิกเพื่ออัปเดตข้อมูล — copy เข้า clipboard อัตโนมัติ |
-| `tradingview_description.md` | คำอธิบายสำหรับหน้า publish script บน TradingView |
+| `BTC_MaxPain.pine` | Indicator BTC สำหรับ TradingView (Pine Script v6) |
+| `ETH_MaxPain.pine` | Indicator ETH สำหรับ TradingView (Pine Script v6) |
+| `update_maxpain.bat` | (Windows) ดับเบิลคลิกเพื่ออัปเดตข้อมูล BTC — copy เข้า clipboard อัตโนมัติ |
+| `update_maxpain_eth.bat` | (Windows) เหมือนกันแต่สำหรับ ETH |
+| `tradingview_description.md` | คำอธิบายสำหรับหน้า publish script บน TradingView (ไทย + อังกฤษ) |
 
 ## วิธีติดตั้ง (ครั้งเดียว)
 
@@ -54,12 +56,15 @@ python maxpain.py --top 8 --string
 ## คำสั่งทั้งหมด
 
 ```
-python maxpain.py                  # ตาราง Max Pain ทุก expiry
+python maxpain.py                  # ตาราง Max Pain ทุก expiry (BTC)
+python maxpain.py --currency ETH   # เปลี่ยนเป็น ETH (default: BTC)
 python maxpain.py --top 8          # เฉพาะ 8 expiry ที่ OI สูงสุด
-python maxpain.py --pine FILE     # สร้างไฟล์ Pine Script
+python maxpain.py --pine FILE      # สร้างไฟล์ Pine Script
 python maxpain.py --string         # พิมพ์ data string สำหรับช่อง Data
 python maxpain.py --clip           # copy data string เข้า clipboard (Windows)
 ```
+
+ตัวอย่าง ETH เต็มๆ: `python maxpain.py --currency ETH --top 8 --clip --pine ETH_MaxPain.pine`
 
 ## รูปแบบ data string
 
